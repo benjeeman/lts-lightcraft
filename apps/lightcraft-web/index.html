@@ -23,13 +23,14 @@
   <div id="lightcraft_status" aria-live="polite"></div>
   <script type="module">
     import init, { start, command } from "./lightcraft_web.js";
+    import { installLtsByteBridge } from "./lts-byte-bridge.js";
     (async () => {
       // Compile once; the render workers (worker.js) instantiate the same compiled module.
       const module = await WebAssembly.compileStreaming(fetch("./lightcraft_web_bg.wasm"));
       globalThis.lightcraftModule = module;
       await init({ module_or_path: module });
       // automation: `await lightcraft.command("library.info", "{}")` → JSON text
-      globalThis.lightcraft = { command };
+      globalThis.lightcraft = installLtsByteBridge({ command });
       start();
     })().catch((e) => {
       console.error(e);
