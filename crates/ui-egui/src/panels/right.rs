@@ -530,9 +530,11 @@ fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let pretty = format!("{:.5}° {}, {:.5}° {}", la.abs(), if la >= 0.0 { "N" } else { "S" }, lo.abs(), if lo >= 0.0 { "E" } else { "W" });
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(pretty).size(11.0).color(t.text_dim));
-                if text_button(ui, "showOnMap", crate::i18n::tr("Show on Map"), false)
-                    .on_hover_text(crate::i18n::tr("Open the place in OpenStreetMap"))
-                    .clicked()
+                // the LTS editor opens no external page, so it has no map button (the coordinates stay)
+                if app.presentation().shows_community()
+                    && text_button(ui, "showOnMap", crate::i18n::tr("Show on Map"), false)
+                        .on_hover_text(crate::i18n::tr("Open the place in OpenStreetMap"))
+                        .clicked()
                 {
                     let url = format!("https://www.openstreetmap.org/?mlat={la:.6}&mlon={lo:.6}#map=15/{la:.6}/{lo:.6}");
                     if let Err(e) = crate::links::open(app, &url) {

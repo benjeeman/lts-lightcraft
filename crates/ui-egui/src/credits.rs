@@ -219,9 +219,18 @@ fn profile_url(c: &Contributor) -> String {
     format!("https://github.com/{}", c.login)
 }
 
-/// A contributor's name as a link to their GitHub profile, with the whole line as its tooltip.
+/// A contributor's name with the whole line as its tooltip: a link to their GitHub profile in the
+/// standalone app, plain (selectable) text in the LTS editor, which opens no external page.
+/// Registered as `credit:{login}`.
 fn name_link(app: &mut LightcraftApp, ui: &mut egui::Ui, c: &Contributor, names: NameMode) {
-    if ui.link(c.name(names)).on_hover_text(c.summary()).clicked() {
+    if !app.presentation().shows_community() {
+        let r = ui.add(egui::Label::new(c.name(names)).selectable(true)).on_hover_text(c.summary());
+        crate::widgets::register(ui.ctx(), format!("credit:{}", c.login), r.rect);
+        return;
+    }
+    let r = ui.link(c.name(names)).on_hover_text(c.summary());
+    crate::widgets::register(ui.ctx(), format!("credit:{}", c.login), r.rect);
+    if r.clicked() {
         let _ = crate::links::open(app, &profile_url(c));
     }
 }

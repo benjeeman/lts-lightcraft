@@ -136,6 +136,8 @@ pub(crate) struct Prepared {
     pub base: Arc<Plane>,
     pub clarity_blur: Option<Arc<Plane>>,
     pub texture_blur: Option<Arc<Plane>>,
+    /// The sharpening band when Sharpening › Radius is not 1; `None`: sharpening reads `texture_blur`.
+    pub sharpen_blur: Option<Arc<Plane>>,
     pub dark: Option<Arc<Plane>>,
     /// Blurred chromaticity (`rgb / Y`) for local Moiré / Noise.
     pub chroma_blur: Option<Arc<Rgb32f>>,

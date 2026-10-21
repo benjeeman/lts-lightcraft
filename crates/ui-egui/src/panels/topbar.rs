@@ -8,6 +8,17 @@ use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
 
+/// The cloud icon's tooltip while `n` changes couldn't be written (`e`: why).
+pub fn unsaved_tooltip(n: usize, e: &str) -> String {
+    crate::i18n::tr_format!(
+        "{n} change{} saved in memory but not written to disk: {e}\nSaving is retried automatically; quitting now would lose {}.",
+        if n == 1 { "" } else { "s" },
+        if n == 1 { "it" } else { "them" },
+        e = e,
+        n = n
+    )
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let left = if app.integrated_titlebar { 78 } else { 10 };
@@ -112,16 +123,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             // right icons
             let mut x = full.right() - 18.0;
             // saving is failing: the cloud icon turns into a warning until a save succeeds
-            let unsaved = app.session.unsaved().map(|(n, e)| {
-                crate::i18n::tr_format!(
-                    "{n} change{} saved in memory but not written to disk: {e}\nLightCraft retries automatically; quitting now would lose {}.",
-                    if n == 1 { "" } else { "s" },
-                    if n == 1 { "it" } else { "them" },
-                    e = e,
-                    n = n
-                )
-            });
+            let unsaved = app.session.unsaved().map(|(n, e)| unsaved_tooltip(n, e));
             let cloud_tip = unsaved.as_deref().unwrap_or("Local library — no cloud account needed");
+            let community = app.presentation().shows_community();
             for (id, icon, tip, cmd) in [
                 ("discord", Icon::Chat, "Join the ArtCraft community on Discord", "app.discord"),
                 ("cloud", Icon::Cloud, cloud_tip, ""),
@@ -129,6 +133,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 ("share", Icon::Share, "Export", "dialog.export"),
                 ("bell", Icon::Bell, "Activity", "panel.activity"),
             ] {
+                // the LTS editor has no community button: the other icons move over
+                if id == "discord" && !community {
+                    continue;
+                }
                 let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
                 let resp = ui.interact(r, egui::Id::new(("top", id)), Sense::click()).on_hover_text(tip);
                 register(ui.ctx(), format!("icon:{id}"), r);

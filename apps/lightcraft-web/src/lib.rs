@@ -5,20 +5,26 @@
 //! - the library lives in browser storage (OPFS, or IndexedDB where OPFS can't be written from the
 //!   main thread): catalog journal, presets, view state and prefs are mirrored in memory and
 //!   flushed in the background ([`files`]); imported originals are stored by content hash
-//!   ([`store`]); a new library starts with the procedural demo photos;
+//!   ([`store`]); a new library starts with the procedural demo photos (embedded: only with
+//!   `?demo`);
 //! - renders run in Web Workers, each a second instance of this module ([`wire`], `workers`), and
 //!   fall back to the main thread (one job per frame) if workers can't start;
 //! - export downloads the file through the browser.
 //!
 //! `?bench` in the URL runs a scripted first-paint / slider-latency measurement and logs it to the
 //! console (see [`bench`]); `?store=idb` forces the IndexedDB backend, `?store=memory` disables
-//! persistence and `?workers=0` renders on the main thread.
+//! persistence and `?workers=0` renders on the main thread; `?embedded` selects the LTS host's
+//! presentation and `?demo` seeds an embedded library's demo photos (see [`options`]); `lts.*`
+//! commands reach the LTS hook ([`lts_view`]), which in the LTS presentation also refuses every
+//! other command id sent from JavaScript.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod backup;
 pub mod bench;
 pub mod files;
+pub mod lts_view;
+pub mod options;
 pub mod store;
 pub mod wire;
 

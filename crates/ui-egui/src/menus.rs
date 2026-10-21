@@ -235,6 +235,15 @@ pub fn parse_rgb(v: &Value) -> Option<[u8; 3]> {
 
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    // the LTS editor refuses the community commands for every caller (menus, keys, control, JS)
+    if !app.presentation().allows_command(id) {
+        return Some(Err(crate::presentation::COMMUNITY_REFUSAL.into()));
+    }
+    // its Help (F1) is the local Keyboard Shortcuts, not an upstream documentation page
+    if id == "app.help" && app.presentation() == crate::presentation::Presentation::LtsEmbedded {
+        app.ui.dialog = Some(Dialog::Shortcuts);
+        return Some(Ok(Value::Null));
+    }
     if let Some(language) = language_from_command(id) {
         app.ui.language = language;
         // Immediately, not on the next frame: the reply and anything else run this frame
@@ -1249,6 +1258,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
 }
 
 pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
+    if !app.presentation().allows_command(id) {
+        return false;
+    }
     match id {
         s if s.starts_with("panel.") || s.starts_with("tool.") || s.starts_with("section.") => app.session.active().is_some() || s == "panel.close",
         "app.export" | "dialog.export" | "dialog.createPreset" | "dialog.rename" | "dialog.captureTime" | "dialog.copySettings" => {
@@ -1289,13 +1301,16 @@ pub struct MenuEntry {
     pub enabled: bool,
 }
 
-/// The flattened menu model (UI commands + engine commands with menu paths).
+/// The flattened menu model (UI commands + engine commands with menu paths). Every menu surface
+/// (in-window, native, `ui.menu.list`/`ui.menu.tree`) is built from it, so the LTS editor's
+/// projection lives here: no community command, product-named labels relabelled.
 pub fn menu_entries(app: &LightcraftApp) -> Vec<MenuEntry> {
+    let presentation = app.presentation();
     let mut v: Vec<MenuEntry> = ui_commands()
-        .filter(|c| !c.3.is_empty())
+        .filter(|c| !c.3.is_empty() && presentation.allows_command(c.0))
         .map(|(id, label, sc, m)| MenuEntry {
             id: id.to_string(),
-            label: label.to_string(),
+            label: presentation.command_label(id, label).to_string(),
             menu: m.split('>').map(str::to_string).collect(),
             shortcut: sc.map(str::to_string),
             enabled: ui_enabled(app, id),

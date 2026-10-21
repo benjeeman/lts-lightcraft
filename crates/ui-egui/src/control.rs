@@ -54,8 +54,11 @@ fn wrap(r: Result<Value, String>) -> Outcome {
 }
 
 pub fn all_commands(app: &LightcraftApp) -> Value {
+    let presentation = app.presentation();
     let mut v: Vec<Value> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
-    for (id, label, sc, menu) in crate::menus::ui_commands() {
+    // the LTS editor lists no community command, and its own labels (as its menus do)
+    for (id, label, sc, menu) in crate::menus::ui_commands().filter(|c| presentation.allows_command(c.0)) {
+        let label = presentation.command_label(id, label);
         v.push(json!({"id": id, "label": label, "shortcut": sc, "menu": [menu], "enabled": crate::menus::ui_enabled(app, id), "ui": true}));
     }
     Value::Array(v)

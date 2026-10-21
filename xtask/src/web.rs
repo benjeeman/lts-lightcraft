@@ -15,10 +15,10 @@ use crate::{cargo, metadata, root, run as step};
 const TARGET: &str = "wasm32-unknown-unknown";
 
 /// Files copied from `apps/lightcraft-web/` into the bundle as they are.
-const STATIC_FILES: [&str; 2] = ["index.html", "worker.js"];
+const STATIC_FILES: [&str; 3] = ["index.html", "worker.js", "lts-byte-bridge.js"];
 
 /// Bundle files that get precompressed copies.
-const COMPRESSED: [&str; 4] = ["index.html", "worker.js", "lightcraft_web.js", "lightcraft_web_bg.wasm"];
+const COMPRESSED: [&str; 5] = ["index.html", "worker.js", "lts-byte-bridge.js", "lightcraft_web.js", "lightcraft_web_bg.wasm"];
 
 /// The `wasm-bindgen` version pinned in Cargo.lock (the CLI must match it exactly).
 fn locked_bindgen_version() -> Result<String, String> {

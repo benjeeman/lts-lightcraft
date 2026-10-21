@@ -66,6 +66,8 @@ fn failed_save_is_reported_and_shown_until_a_save_succeeds() {
     h.step();
     let toast = h.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
     assert!(toast.contains("not written to disk"), "{toast}");
+    // neutral in every presentation: the toast says what happens, not which product retries
+    assert!(toast.ends_with("saving will be retried") && !toast.contains("LightCraft"), "{toast}");
     assert!(has_indicator(&h));
     let inspect = h.request("ui.inspect", json!({}), T);
     assert_eq!(inspect["result"]["unsaved"]["ops"], 1, "{inspect}");

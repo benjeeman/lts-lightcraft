@@ -133,14 +133,21 @@ fn wb_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw
     put_rgb(i, max(c * 1.0, vec3<f32>(0.0)));
 }
 
-// Luminance NR: scale by 2^((f − l)·k) (a: image, b: log luminance l, c: filtered f). P[1] = k.
+// Luminance NR: scale by 2^((f − l)·k) (a: image, b: log luminance l, c: filtered f). P[1] = k,
+// P[2] = Contrast (0..1, `local::nr_contrast_keep`: holds back the large changes).
 @compute @workgroup_size(256)
 fn nr_lum(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
     let i = lin_index(g, nw);
     if (i >= pu(0u)) {
         return;
     }
-    let d = (c[i] - b[i]) * pf(1u);
+    let raw = c[i] - b[i];
+    var d = raw * pf(1u);
+    let contrast = pf(2u);
+    if (contrast > 0.0) {
+        let t = clamp((abs(raw) - 0.05) / 0.35, 0.0, 1.0);
+        d = d * (1.0 - contrast * 0.8 * (t * t * (3.0 - 2.0 * t)));
+    }
     put_rgb(i, rgb_a(i) * exp2(d));
 }
 

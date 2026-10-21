@@ -156,7 +156,8 @@ impl Originals {
         (loader, probe)
     }
 
-    /// Install the hooks into a session.
+    /// Install the hooks into a session, the originals' bytes (`media.file_bytes`: file metadata,
+    /// Photo Merge, Original exports) included. They read stored originals only, never a file system.
     pub fn install(&self, session: &mut lightcraft_engine::Session) {
         let (l, p) = self.hooks();
         session.media.file_loader = Some(l);
@@ -164,6 +165,11 @@ impl Originals {
         let s = self.clone();
         session.media.preview_loader =
             Some(Arc::new(move |path: &str, max_edge: usize| lightcraft_engine::files::embedded_preview_srgb(&s.get(path)?, max_edge)));
+        let s = self.clone();
+        session.media.file_bytes = Some(Arc::new(move |path: &str| match hash_of_path(path) {
+            None => Err(format!("{path}: not an original stored by this page")),
+            Some(_) => s.get(path).map(|bytes| bytes.to_vec()).ok_or_else(|| format!("{path}: the original is still loading from browser storage")),
+        }));
     }
 }
 
@@ -234,6 +240,22 @@ mod tests {
         assert_eq!(p.content_hash.as_deref(), Some(hash.as_str()), "storage key = catalog content hash");
         let out = session.render_now(id, 20, 20).unwrap();
         assert_eq!(out.image.width, 20);
+    }
+
+    /// `media.file_bytes` serves the stored originals exactly, and nothing else: no other path, and
+    /// never the file system.
+    #[test]
+    fn file_bytes_reads_stored_originals_only() {
+        let store = Originals::default();
+        let mut session = lightcraft_engine::Session::new();
+        store.install(&mut session);
+        let read = session.media.file_bytes.clone().unwrap();
+        let bytes = png_bytes(8, 6);
+        let path = store.added("tiny.png", &content_hash(&bytes), Arc::from(bytes.clone()));
+        assert_eq!(read(&path).unwrap(), bytes);
+        for elsewhere in ["web/0123/other.png", "tiny.png", "C:/Windows/win.ini", "/etc/hosts", ""] {
+            assert!(read(elsewhere).is_err(), "{elsewhere:?}");
+        }
     }
 
     #[test]

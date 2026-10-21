@@ -32,8 +32,13 @@ pub fn url_of(cmd: &str) -> Option<&'static str> {
     LINKS.iter().find(|(id, _, _)| *id == cmd).map(|(_, _, u)| *u)
 }
 
-/// Open `url` in the user's browser (through the host's `open_url` service).
+/// Open `url` in the user's browser (through the host's `open_url` service). Every caller goes
+/// through here; the LTS editor (`Presentation::LtsEmbedded`) opens no external page, and refuses
+/// before the service is called.
 pub fn open(app: &mut crate::LightcraftApp, url: &str) -> Result<serde_json::Value, String> {
+    if let Some(refusal) = app.presentation().url_refusal(url) {
+        return Err(refusal.into());
+    }
     let open = app.services.open_url.as_mut().ok_or("can't open links here")?;
     open(url)?;
     Ok(serde_json::json!({ "url": url }))

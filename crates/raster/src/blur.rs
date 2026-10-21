@@ -3,18 +3,33 @@
 use crate::resample::Pixel;
 use crate::{Image, par_rows};
 
-/// Box radii approximating a Gaussian of `sigma` with 3 passes (Kovesi / Wells).
+/// The widest sigma (px) [`box_radii`] computes: a million pixels, wider than any image the
+/// editor holds. Larger sigmas (infinity included) blur as this one; [`gaussian`] caps every box
+/// pass at the image's side anyway.
+pub const MAX_SIGMA: f32 = 1.0e6;
+
+/// Box radii approximating a Gaussian of `sigma` with 3 passes (Kovesi / Wells). Integer parts
+/// are 64-bit (the box width was squared in `i32`, which overflowed past a sigma of ~23,170); for
+/// every sigma below that the radii are the same as before. A NaN sigma gives no blur.
 pub fn box_radii(sigma: f32) -> [usize; 3] {
+    let sigma = if sigma.is_nan() { 0.0 } else { sigma.abs().min(MAX_SIGMA) };
     let n = 3.0f32;
     let w_ideal = (12.0 * sigma * sigma / n + 1.0).sqrt();
-    let mut wl = w_ideal.floor() as i32;
+    let mut wl = w_ideal.floor() as i64;
     if wl % 2 == 0 {
         wl -= 1;
     }
     let wu = wl + 2;
     let m_ideal = (12.0 * sigma * sigma - n * (wl * wl) as f32 - 4.0 * n * wl as f32 - 3.0 * n) / (-4.0 * wl as f32 - 4.0);
-    let m = m_ideal.round() as i32;
-    std::array::from_fn(|i| (((if (i as i32) < m { wl } else { wu }) - 1) / 2).max(0) as usize)
+    let m = m_ideal.round() as i64;
+    std::array::from_fn(|i| usize::try_from(((if (i as i64) < m { wl } else { wu }) - 1) / 2).unwrap_or(0))
+}
+
+/// The radius a box pass over a row or column of `len` pixels uses for `r`: at most `len`. Past
+/// the image's side every window only repeats its edge pixels, so wider boxes cost time without
+/// meaning; ordinary radii (below the side) are untouched.
+pub fn pass_radius(r: usize, len: usize) -> usize {
+    r.min(len)
 }
 
 /// One horizontal box pass over `row` (clamped edges), using `tmp` as scratch.
@@ -71,7 +86,10 @@ fn box_v<T: Pixel>(src: &Image<T>, dst: &mut Image<T>, r: usize) {
     });
 }
 
-/// Blur with Gaussian `sigma` (pixels). `sigma <= 0.3` returns a copy.
+/// Blur with Gaussian `sigma` (pixels). `sigma <= 0.3` returns a copy, and a NaN sigma leaves the
+/// pixels as they are. Any other sigma, however wide, blurs in bounded time: each box pass is
+/// capped at the image's side ([`pass_radius`]), so every sigma whose boxes all reach past the
+/// sides blurs alike.
 pub fn gaussian<T: Pixel>(img: &Image<T>, sigma: f32) -> Image<T> {
     if sigma <= 0.3 || img.is_empty() {
         return img.clone();
@@ -81,7 +99,7 @@ pub fn gaussian<T: Pixel>(img: &Image<T>, sigma: f32) -> Image<T> {
     par_rows(&mut a.data, img.width, |_, row| {
         let mut tmp = Vec::with_capacity(row.len());
         for r in radii {
-            box_row(row, &mut tmp, r);
+            box_row(row, &mut tmp, pass_radius(r, row.len()));
         }
     });
     let mut b = Image::<T>::new(img.width, img.height);
@@ -89,7 +107,7 @@ pub fn gaussian<T: Pixel>(img: &Image<T>, sigma: f32) -> Image<T> {
         if r == 0 {
             continue;
         }
-        box_v(&a, &mut b, r);
+        box_v(&a, &mut b, pass_radius(r, img.height));
         std::mem::swap(&mut a, &mut b);
     }
     a

@@ -2,7 +2,11 @@
 //!
 //! The Planckian locus uses the Kim et al. (2002) cubic approximation (1667–25000 K); outside that
 //! range it is extended linearly in mired space. Tint is a signed offset perpendicular to the locus in
-//! CIE 1960 (u, v): **positive tint = magenta** (below the locus), `Duv = −tint / TINT_SCALE`.
+//! CIE 1960 (u, v), with the professional (Lightroom, Camera Raw, DNG) sign: **positive tint renders
+//! magenta**. The temperature/tint pair names the light the photo was taken under, which white
+//! balance neutralises, so a positive tint names a greener light (above the locus, towards higher
+//! v): `Duv = tint / TINT_SCALE`. A fluorescent green cast is therefore taken out by a positive tint
+//! (the Fluorescent preset's +21), as the slider's green-to-magenta track and `crs:Tint` say.
 
 use crate::{Mat3, RgbSpace, Xy, bradford};
 
@@ -65,11 +69,12 @@ fn locus_normal(t: f64) -> (f64, f64) {
     if ny < 0.0 { (-nx, -ny) } else { (nx, ny) }
 }
 
-/// Chromaticity of the white point for temperature `t` (K) and `tint`.
+/// Chromaticity of the light named by temperature `t` (K) and `tint` (positive: greener light,
+/// rendered magenta once balanced).
 pub fn temp_tint_to_xy(t: f64, tint: f64) -> Xy {
     let (u, v) = locus_uv(t);
     let (nu, nv) = locus_normal(t);
-    let duv = -tint / TINT_SCALE;
+    let duv = tint / TINT_SCALE;
     uv_to_xy(u + nu * duv, v + nv * duv)
 }
 
@@ -104,7 +109,7 @@ pub fn xy_to_temp_tint(p: Xy) -> (f64, f64) {
     let (lu, lv) = locus_uv(t);
     let (nu, nv) = locus_normal(t);
     let duv = (u - lu) * nu + (v - lv) * nv;
-    (t, -duv * TINT_SCALE)
+    (t, duv * TINT_SCALE)
 }
 
 /// Matrix (linear RGB in `space` → same space) that white-balances a scene lit by `src` so that it
@@ -141,10 +146,10 @@ mod tests {
         let warm = temp_tint_to_xy(3000.0, 0.0);
         let cool = temp_tint_to_xy(9000.0, 0.0);
         assert!(warm.x > cool.x);
-        // positive tint is magenta: lower v
+        // positive tint names a greener light (higher v), which white balance renders magenta
         let (_, v0) = xy_to_uv(temp_tint_to_xy(5000.0, 0.0));
         let (_, v1) = xy_to_uv(temp_tint_to_xy(5000.0, 50.0));
-        assert!(v1 < v0);
+        assert!(v1 > v0);
     }
 
     #[test]

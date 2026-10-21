@@ -1,5 +1,23 @@
 # LightCraft — instructions for agents
 
+> **LTS fork: read first.** This checkout is a modified fork intended as LTS's "Image adjustments" editing engine
+> (its LTS presentation is staged: it needs a versioned package built from this fork and host promotion). It is
+> based on LightCraft by the ArtCraft team and community, is maintained independently and is not an official
+> ArtCraft product. For this fork the owner's LTS rebranding instruction supersedes the upstream product
+> framing and community guidance below:
+> - The LTS presentation (`?embedded` in the web build; `presentation::Presentation::LtsEmbedded`) names the engine
+>   "LTS Image adjustments" / "Image adjustments", lists and paints no community, website, Discord or upstream-support
+>   route, and opens no external link (`crates/ui-egui/tests/embedded_presentation_*.rs`, `apps/lightcraft-web/tests/`).
+>   The standalone presentation stays upstream's: it is the regression control.
+> - Keep every technical identifier: crate and binary names, command ids (including the `app.*` link ids that
+>   `cargo xtask parity` checks), file formats (`.lcpreset`, `.lccurve`, `lightcraft-catalog`), the XMP `lc:` namespace,
+>   browser storage keys (IndexedDB `lightcraft`, OPFS keys, the Web Lock), the JS globals `lightcraft`/`lightcraftModule`,
+>   wasm exports, DOM ids, env vars and MCP names. Keep LICENSE, NOTICE, ATTRIBUTION and copyright texts unchanged, and
+>   the plain-text attribution "Modified version based on LightCraft by the ArtCraft team and community."
+> - Add no LTS support, community or website URL, e-mail address or handle.
+> - The engineering rules below (never crash, clean-room, pure Rust, assets, tests, quality gates) apply unchanged.
+>   Upstream technical and reference docs (`docs/`, `ROADMAP.md`) are kept verbatim as upstream reference.
+
 LightCraft is a clean-room, open-source, pure-Rust photo library + non-destructive raw developer targeting Adobe Lightroom parity (and beyond). Native on macOS, Windows, Linux; web via WASM. Sibling of `../pdfcraft` (Acrobat), `../photocraft` (Photoshop), `../vectorcraft` (Illustrator) and `../filmcraft` (Premiere), with the same conventions.
 
 ## Start every session here
