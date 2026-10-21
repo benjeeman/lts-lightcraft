@@ -54,11 +54,83 @@ pub(crate) fn rename_preview(
     (read(&rows), total)
 }
 
-/// About dialog tabs: (widget id suffix, label). The credits come from `crate::credits`.
-pub const ABOUT_TABS: &[(&str, &str)] = &[("about", "About"), ("contributors", "Contributors"), ("models", "Models")];
+/// About dialog tabs: (widget id suffix, label). The credits come from `crate::credits`, the
+/// notices from `crate::third_party`.
+pub const ABOUT_TABS: &[(&str, &str)] =
+    &[("about", "About"), ("contributors", "Contributors"), ("models", "Models"), ("notices", "Third-party notices")];
 
 /// Help ▸ What's New (docs/whats-new.md).
 pub const WHATS_NEW: &str = include_str!("../../../../docs/whats-new.md");
+
+/// Help ▸ Keyboard Shortcuts: (label, shortcut, command id) for every UI command, engine command
+/// and alias that has a key, in that order. Labels are source text (translated when painted) as
+/// the presentation shows them. The bindings themselves never depend on the presentation (the
+/// commands the LTS editor refuses have no key).
+pub fn shortcut_rows(presentation: crate::presentation::Presentation) -> Vec<(&'static str, &'static str, &'static str)> {
+    let mut rows = Vec::new();
+    for (id, label, sc, _) in crate::menus::ui_commands() {
+        if let Some(sc) = sc
+            && presentation.allows_command(id)
+        {
+            rows.push((presentation.command_label(id, label), *sc, *id));
+        }
+    }
+    for c in lightcraft_engine::command_specs() {
+        if let Some(sc) = c.shortcut {
+            rows.push((c.label, sc, c.id));
+        }
+    }
+    for (sc, id, _) in crate::shortcuts::ALIASES {
+        let label = crate::menus::ui_commands()
+            .find(|c| c.0 == *id)
+            .map(|c| presentation.command_label(c.0, c.1))
+            .or_else(|| lightcraft_engine::find_command(id).map(|c| c.label))
+            .unwrap_or(id);
+        rows.push((label, *sc, *id));
+    }
+    rows
+}
+
+/// About ▸ About: the engine, its version, the upstream attribution and the licence line. The
+/// standalone app keeps its community button and links; the LTS editor shows the same facts as
+/// plain text, with no links (its Third-party notices tab has the licences).
+fn about_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    let community = app.presentation().shows_community();
+    if community {
+        ui.label(egui::RichText::new("LightCraft").font(t.semibold(20.0)).color(t.text));
+        ui.label(crate::i18n::tr_format!("Version {} — a clean-room, pure-Rust photo library and raw developer.", env!("CARGO_PKG_VERSION")));
+    } else {
+        ui.label(egui::RichText::new(crate::presentation::EMBEDDED_NAME).font(t.semibold(20.0)).color(t.text));
+        ui.label(format!("{} {}", crate::i18n::tr("Editing engine version"), env!("CARGO_PKG_VERSION")));
+    }
+    ui.label(crate::presentation::ATTRIBUTION);
+    ui.label(format!("MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.", crate::theme::font_credits()));
+    if !community {
+        return;
+    }
+    ui.add_space(10.0);
+    let discord =
+        egui::Button::new(egui::RichText::new(crate::i18n::tr("Join the ArtCraft Discord")).font(t.semibold(15.0)).color(egui::Color32::WHITE))
+            .fill(t.accent)
+            .min_size(egui::vec2(260.0, 34.0));
+    let r = ui.add(discord).on_hover_text(crate::links::DISCORD);
+    crate::widgets::register(ui.ctx(), "button:aboutDiscord", r.rect);
+    if r.clicked() {
+        let _ = crate::links::open(app, crate::links::DISCORD);
+    }
+    ui.add_space(6.0);
+    for (id, label, url) in [
+        ("aboutWebsite", "LightCraft website", crate::links::APP_PAGE),
+        ("aboutGithub", "Source code on GitHub", crate::links::GITHUB),
+        ("aboutArtcraft", "ArtCraft — more creative apps", crate::links::WEBSITE),
+    ] {
+        let r = ui.link(crate::i18n::tr(label)).on_hover_text(url);
+        crate::widgets::register(ui.ctx(), format!("link:{id}"), r.rect);
+        if r.clicked() {
+            let _ = crate::links::open(app, url);
+        }
+    }
+}
 
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let Some(mut dlg) = app.ui.dialog.clone() else { return };
@@ -98,7 +170,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
         Dialog::SamModel { .. } => "Download the SAM 3 Model?",
-        Dialog::About => "About LightCraft",
+        Dialog::About => app.presentation().command_label("app.about", "About LightCraft"),
         Dialog::Shortcuts => "Keyboard Shortcuts",
     }
     .to_string();
@@ -727,58 +799,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     match tab {
                         1 => crate::credits::contributors_ui(app, ui),
                         2 => crate::credits::models_ui(ui),
-                        _ => {
-                            ui.label(egui::RichText::new("LightCraft").font(t.semibold(20.0)).color(t.text));
-                            ui.label(crate::i18n::tr_format!("Version {} — a clean-room, pure-Rust photo library and raw developer.", env!("CARGO_PKG_VERSION")));
-                            ui.label(format!("MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.", crate::theme::font_credits()));
-                            ui.add_space(10.0);
-                            let discord = egui::Button::new(egui::RichText::new(crate::i18n::tr("Join the ArtCraft Discord")).font(t.semibold(15.0)).color(egui::Color32::WHITE))
-                                .fill(t.accent)
-                                .min_size(egui::vec2(260.0, 34.0));
-                            let r = ui.add(discord).on_hover_text(crate::links::DISCORD);
-                            crate::widgets::register(ui.ctx(), "button:aboutDiscord", r.rect);
-                            if r.clicked() {
-                                let _ = crate::links::open(app, crate::links::DISCORD);
-                            }
-                            ui.add_space(6.0);
-                            for (label, url) in [
-                                ("LightCraft website", crate::links::APP_PAGE),
-                                ("Source code on GitHub", crate::links::GITHUB),
-                                ("ArtCraft — more creative apps", crate::links::WEBSITE),
-                            ] {
-                                let r = ui.link(crate::i18n::tr(label)).on_hover_text(url);
-                                if r.clicked() {
-                                    let _ = crate::links::open(app, url);
-                                }
-                            }
-                        }
+                        3 => crate::third_party::ui(ui),
+                        _ => about_body(app, ui, &t),
                     }
                 }
                 Dialog::Shortcuts => {
+                    let rows = shortcut_rows(app.presentation());
                     egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
                         egui::Grid::new("shortcuts").striped(true).show(ui, |ui| {
-                            for (id, label, sc, _) in crate::menus::ui_commands() {
-                                if let Some(sc) = sc {
-                                    ui.label(crate::i18n::tr(label));
-                                    ui.label(*sc);
-                                    ui.label(egui::RichText::new(*id).color(t.text_dim));
-                                    ui.end_row();
-                                }
-                            }
-                            for c in lightcraft_engine::command_specs() {
-                                if let Some(sc) = c.shortcut {
-                                    ui.label(crate::i18n::tr(c.label));
-                                    ui.label(sc);
-                                    ui.label(egui::RichText::new(c.id).color(t.text_dim));
-                                    ui.end_row();
-                                }
-                            }
-                            for (sc, id, _) in crate::shortcuts::ALIASES {
-                                let label = crate::menus::ui_commands()
-                                    .find(|c| c.0 == *id)
-                                    .map(|c| c.1)
-                                    .or_else(|| lightcraft_engine::find_command(id).map(|c| c.label))
-                                    .unwrap_or(id);
+                            for (label, sc, id) in &rows {
                                 ui.label(crate::i18n::tr(label));
                                 ui.label(*sc);
                                 ui.label(egui::RichText::new(*id).color(t.text_dim));

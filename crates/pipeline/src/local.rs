@@ -123,6 +123,18 @@ pub struct NrLum {
     pub sigma: f32,
     pub eps: f32,
     pub k: f32,
+    /// Detail › Noise Reduction › Contrast (0..1): how much of the filter's change it holds back
+    /// where the change is large (local contrast, not noise). 0 = the whole change, as before.
+    pub contrast: f32,
+}
+
+/// The share of a luminance noise-reduction change `d` (log2) that is applied at Contrast
+/// `contrast` (0..1): all of it at 0; at 1, a fifth of the large changes (|d| ≥ 0.4 EV, local
+/// contrast) and nearly all of the small ones (noise).
+#[inline]
+pub fn nr_contrast_keep(contrast: f32, d: f32) -> f32 {
+    let t = ((d.abs() - 0.05) / 0.35).clamp(0.0, 1.0);
+    1.0 - contrast * 0.8 * (t * t * (3.0 - 2.0 * t))
 }
 
 /// Colour noise reduction: chromaticity blurred by `sigma` px, mixed in by `t`.
@@ -139,7 +151,8 @@ pub fn nr_params(s: &DevelopSettings, src_long: usize, out_long: usize) -> (Opti
     let scale = (out_long as f32 / src_long.max(1) as f32).clamp(0.05, 1.0);
     let l = (lum > 0.0).then(|| {
         let detail = (s.detail.nr_detail / 100.0) as f32;
-        NrLum { sigma: (1.0 + 2.5 * lum) * scale.max(0.4), eps: 0.002 + lum * lum * 0.25 * (1.0 - 0.7 * detail), k: lum.sqrt() }
+        let contrast = (s.detail.nr_contrast / 100.0).clamp(0.0, 1.0) as f32;
+        NrLum { sigma: (1.0 + 2.5 * lum) * scale.max(0.4), eps: 0.002 + lum * lum * 0.25 * (1.0 - 0.7 * detail), k: lum.sqrt(), contrast }
     });
     let c = (col > 0.0).then(|| {
         let sigma = (1.5 + 6.0 * col) * scale.max(0.35) * (1.0 + (s.detail.nr_color_smoothness / 100.0) as f32);
@@ -162,7 +175,10 @@ pub fn denoise(img: &mut Rgb32f, s: &DevelopSettings, src_long: usize, out_long:
         for_rows(&mut img.data, w, |y, row| {
             for (x, p) in row.iter_mut().enumerate() {
                 let i = y * w + x;
-                let d = (f.data[i] - l.data[i]) * nr.k;
+                let mut d = (f.data[i] - l.data[i]) * nr.k;
+                if nr.contrast > 0.0 {
+                    d *= nr_contrast_keep(nr.contrast, f.data[i] - l.data[i]);
+                }
                 let g = d.exp2();
                 *p = p.map(|v| v * g);
             }
@@ -206,6 +222,8 @@ pub(crate) struct Planes {
     pub base: Option<(u32, Arc<Plane>)>,
     pub clarity: Option<(u32, Arc<Plane>)>,
     pub texture: Option<(u32, Arc<Plane>)>,
+    /// The sharpening band when Sharpening › Radius is not 1 (see [`PlaneSigmas::sharpen`]).
+    pub sharpen: Option<(u32, Arc<Plane>)>,
     /// Dark channel and its airlight.
     pub dark: Option<(u32, Arc<Plane>, f32)>,
     /// Blurred chromaticity (local Moiré / Noise).
@@ -246,6 +264,9 @@ pub struct PlaneSigmas {
     pub clarity: Option<f32>,
     /// Texture / sharpening band (Gaussian).
     pub texture: Option<f32>,
+    /// Sharpening band of its own (Gaussian), when Detail › Sharpening › Radius is not 1: the
+    /// texture band's radius times Radius (0.5..3). At Radius 1 sharpening reads `texture` itself.
+    pub sharpen: Option<f32>,
     /// Dehaze dark channel (Gaussian).
     pub dark: Option<f32>,
     /// Chromaticity blur for local Moiré / colour noise (Gaussian).
@@ -273,7 +294,10 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
     .then(|| (0.0018 * ppl).max(0.6));
     let dark = (s.effects.dehaze != 0.0 || local_any(|a| a.dehaze)).then(|| (0.02 * ppl).max(1.0));
     let chroma = (local_any(|a| a.moire) || s.masks.iter().any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
-    PlaneSigmas { base, clarity, texture, dark, chroma }
+    let sharpening = s.detail.sharpen_amount != 0.0 || local_any(|a| a.sharpness);
+    let radius = s.detail.sharpen_radius;
+    let sharpen = texture.filter(|_| sharpening && radius.is_finite() && radius != 1.0).map(|t| t * radius.clamp(0.5, 3.0) as f32);
+    PlaneSigmas { base, clarity, texture, dark, chroma, sharpen }
 }
 
 /// The spatial planes the per-pixel stage needs for `img` (white-balanced, before exposure),
@@ -281,10 +305,16 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
 /// one alone scales poorly: the guided filters work on small subsampled grids).
 pub(crate) fn prepare(img: Arc<Rgb32f>, s: &DevelopSettings, frame: &Frame, px_per_long: f64, q: Quality, planes: &mut Planes) -> Prepared {
     let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || img.map(log_lum)))).clone();
-    let PlaneSigmas { base: base_sigma, clarity: clarity_sigma, texture: texture_sigma, dark: dark_sigma, chroma: chroma_sigma } =
-        plane_sigmas(s, px_per_long, q);
+    let PlaneSigmas {
+        base: base_sigma,
+        clarity: clarity_sigma,
+        texture: texture_sigma,
+        dark: dark_sigma,
+        chroma: chroma_sigma,
+        sharpen: sharpen_sigma,
+    } = plane_sigmas(s, px_per_long, q);
 
-    let Planes { base: sb, clarity: sc, texture: st, dark: sd, chroma: sch, .. } = planes;
+    let Planes { base: sb, clarity: sc, texture: st, dark: sd, chroma: sch, sharpen: ssh, .. } = planes;
     let chroma_blur = chroma_sigma.map(|sg| match sch {
         Some((k, c)) if *k == sg.to_bits() => c.clone(),
         _ => {
@@ -318,6 +348,7 @@ pub(crate) fn prepare(img: Arc<Rgb32f>, s: &DevelopSettings, frame: &Frame, px_p
             )
         },
     );
+    let sharpen_blur = sharpen_sigma.map(|sg| plane_at(ssh, sg, || timed("sharpen", || gaussian(l, sg))));
     let base = base.unwrap_or_else(|| log_l.clone());
     let (dark, air) = match dark {
         Some((d, air)) => (Some(d), air),
@@ -325,7 +356,7 @@ pub(crate) fn prepare(img: Arc<Rgb32f>, s: &DevelopSettings, frame: &Frame, px_p
     };
     let ev = s.light.exposure as f32;
     let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev));
-    Prepared { img, log_l, base, clarity_blur, texture_blur, dark, chroma_blur, air, masks, px_per_long }
+    Prepared { img, log_l, base, clarity_blur, texture_blur, sharpen_blur, dark, chroma_blur, air, masks, px_per_long }
 }
 
 /// The airlight is estimated from every `AIRLIGHT_STEP`-th value of the dark channel.

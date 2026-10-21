@@ -18,6 +18,7 @@ use crate::backend::Backend;
 use crate::backup::{ACTIVE_LIBRARY, DEFAULT_LIBRARY_DIR, valid_library_dir};
 use crate::bench::Bench;
 use crate::files::{Files, FlushOp, LIBRARY_FILES};
+use crate::options::{self, Options};
 use crate::safety::{self, notice};
 use crate::store::{Originals, content_hash, download_name, storage_key};
 use crate::wire::ThumbIndex;
@@ -64,35 +65,9 @@ pub(crate) fn request_repaint() {
     });
 }
 
-/// URL options (`?bench&store=idb&workers=2&reset`).
-struct Options {
-    bench: bool,
-    /// "opfs" (default: OPFS, falling back to IndexedDB), "idb" or "memory".
-    store: String,
-    workers: Option<usize>,
-    reset: bool,
-}
-
-impl Options {
-    fn from_url() -> Options {
-        let q = window().and_then(|w| w.location().search().ok()).unwrap_or_default();
-        let params: Vec<(String, String)> = q
-            .trim_start_matches('?')
-            .split('&')
-            .filter(|p| !p.is_empty())
-            .map(|p| match p.split_once('=') {
-                Some((k, v)) => (k.to_string(), v.to_string()),
-                None => (p.to_string(), String::new()),
-            })
-            .collect();
-        let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
-        Options {
-            bench: get("bench").is_some(),
-            store: get("store").filter(|s| s == "idb" || s == "memory").unwrap_or_else(|| "opfs".into()),
-            workers: get("workers").and_then(|v| v.parse().ok()),
-            reset: get("reset").is_some(),
-        }
-    }
+/// The page's URL options (`?bench&store=idb&workers=2&reset&embedded`; see [`options`]).
+fn options_from_url() -> Options {
+    Options::parse(&window().and_then(|w| w.location().search().ok()).unwrap_or_default())
 }
 
 /// Store a picked/dropped file (bytes into browser storage, then queue its import).
@@ -282,13 +257,11 @@ async fn boot(opts: Options) -> Boot {
     let files = Files::default();
     let mut index = ThumbIndex::default();
     let mut lib_dir = DEFAULT_LIBRARY_DIR.to_string();
+    let presentation = opts.presentation();
     if let Some(b) = &backend {
         if opts.reset {
             // everything this site keeps in the browser, photos included: never without asking
-            let ok = safety::confirm(
-                "?reset deletes the LightCraft library stored in this browser, including every imported photo. \
-                 This can't be undone. Delete it?",
-            );
+            let ok = safety::confirm(options::reset_confirmation(presentation));
             if ok {
                 match b.clear().await {
                     Ok(()) => log::info!("lightcraft: storage cleared (?reset)"),
@@ -315,12 +288,9 @@ async fn boot(opts: Options) -> Boot {
         if let Ok(Some(j)) = b.read(THUMB_INDEX).await {
             index = ThumbIndex::from_json(&j);
         }
-        crate::backend::request_persistence(|granted| {
+        crate::backend::request_persistence(move |granted| {
             if !granted {
-                notice(
-                    "This browser may delete LightCraft's library when it runs short of space (persistent storage wasn't granted). \
-                     Keep your original photos elsewhere and use File ▸ Back Up Library… now and then.",
-                );
+                notice(options::eviction_notice(presentation));
             }
         });
         // thumbnails stored without an index entry (index saved late, or lost): delete them
@@ -374,6 +344,7 @@ struct WebApp {
 impl WebApp {
     fn new(cc: &eframe::CreationContext<'_>, boot: Boot) -> Self {
         let Boot { opts, backend, files, index, lib_dir } = boot;
+        let presentation = opts.presentation();
         let originals = Originals::default();
         let t = perf_now();
         let mut session = Session::new();
@@ -385,7 +356,8 @@ impl WebApp {
             on_disk: false,
         };
         let mut problem = None;
-        match session.open_library_in(stores, true).cloned() {
+        // an embedded page's new library starts empty unless `?demo` (OC-5)
+        match session.open_library_in(stores, opts.seed_demo()).cloned() {
             Ok(r) => log::info!(
                 "lightcraft: library {} in {:.0} ms ({} photos; snapshot seq {}, {} ops replayed)",
                 if r.created { "created" } else { "loaded" },
@@ -403,21 +375,21 @@ impl WebApp {
                     can_retry: false,
                     ..lightcraft_ui_egui::panels::library_problem::LibraryProblem::new(
                         "the browser's storage for this page",
-                        format!("{e}. Reload the page to try again."),
+                        options::library_problem_error(presentation, &e.to_string()),
                     )
                 });
             }
         }
         if backend.is_some() {
-            notice(
-                "LightCraft in the browser is experimental. Your library is kept in this browser's storage: keep your original photos \
-                 elsewhere and back up with File ▸ Back Up Library….",
-            );
+            notice(options::experimental_notice(presentation));
         }
         // previews are large (≤ 2560 px, f32): keep few in a 32-bit address space
         session.media.preview_capacity = 3;
         let frozen = Rc::new(Cell::new(false));
-        let mut app = LightcraftApp::new(session, services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone()));
+        // the host's presentation is set before the first frame, and before the saved UI state is
+        // restored: ui.json never carries (or changes) it
+        let mut app = LightcraftApp::new(session, services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone()))
+            .with_presentation(presentation);
         let ui_written = files.get("ui.json").unwrap_or_default();
         if let Ok(ui) = serde_json::from_slice::<UiState>(&ui_written) {
             app.ui = ui;
@@ -556,7 +528,10 @@ thread_local! {
 
 /// Run a command by id from JavaScript (automation, tests): `await command("library.info", "{}")`
 /// resolves to the result as JSON text, or rejects with the error. Besides every engine/UI
-/// command, `web.stats` reports the browser host's state (storage, workers, originals in memory).
+/// command, `web.stats` reports the browser host's state (storage, workers, originals in memory),
+/// and `lts.*` ids reach the LTS hook only ([`crate::lts_view`]). In the LTS presentation
+/// (`?embedded`) the hook answers every id: it refuses every one outside its table, `web.stats` and
+/// the engine's and the UI's commands included (`command_not_allowed`).
 #[wasm_bindgen]
 pub fn command(id: String, params: String) -> js_sys::Promise {
     js_sys::Promise::new(&mut |resolve, reject| {
@@ -586,9 +561,17 @@ impl WebApp {
 
     fn run_inbox(&mut self) {
         let inbox = INBOX.with(|q| std::mem::take(&mut *q.borrow_mut()));
+        let unreadable = serde_json::Value::Null;
         for (id, params, (resolve, reject)) in inbox {
-            let params: serde_json::Value = serde_json::from_str(&params).unwrap_or(json!({}));
-            let r = if id == "web.stats" { Ok(self.web_stats()) } else { self.app.run(&id, params) };
+            let params: Option<serde_json::Value> = serde_json::from_str(&params).ok();
+            // every id reaches the LTS hook first: it answers the `lts.*` ids, which never reach the command registry
+            // (unreadable params are refused there), and in the LTS presentation every other id too, refused (R1)
+            let lts = crate::lts_view::handle(&mut self.app, &id, params.as_ref().unwrap_or(&unreadable));
+            let r = match lts {
+                Some(r) => r,
+                None if id == "web.stats" => Ok(self.web_stats()),
+                None => self.app.run(&id, params.unwrap_or(json!({}))),
+            };
             let _ = match r {
                 Ok(v) => resolve.call1(&JsValue::NULL, &v.to_string().into()),
                 Err(e) => reject.call1(&JsValue::NULL, &e.into()),
@@ -640,16 +623,15 @@ impl eframe::App for WebApp {
 #[wasm_bindgen]
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
-    safety::install_panic_hook();
+    // parsing can't panic; the panic overlay's wording follows the presentation
+    let opts = options_from_url();
+    let presentation = opts.presentation();
+    safety::install_panic_hook(presentation);
     log::info!("lightcraft: wasm instantiated at {:.0} ms", perf_now());
-    let opts = Options::from_url();
     wasm_bindgen_futures::spawn_local(async move {
         // one tab per library: two would each keep their own copy and overwrite each other's saves
         if opts.store != "memory" && safety::acquire_tab_lock().await == Some(false) {
-            safety::show_blocking(
-                "LightCraft is already open in another tab or window of this browser.\n\n\
-                 Switch to that tab, or close it and reload this page. (Two tabs would overwrite each other's changes.)",
-            );
+            safety::show_blocking(options::tab_lock_message(presentation));
             return;
         }
         let Some(canvas) = window()
@@ -670,8 +652,9 @@ pub fn start() {
                 }
             }
             Err(e) => {
-                log::error!("LightCraft failed to start: {e:?}");
-                set_status(&format!("LightCraft failed to start: {e:?}"));
+                let text = options::start_failure(presentation, &format!("{e:?}"));
+                log::error!("{text}");
+                set_status(&text);
             }
         }
     });

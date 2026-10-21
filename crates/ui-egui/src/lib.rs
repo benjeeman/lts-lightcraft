@@ -18,12 +18,14 @@ pub mod menubar;
 pub mod menus;
 pub mod merge;
 pub mod panels;
+pub mod presentation;
 pub mod render;
 pub mod shortcuts;
 pub mod softpaint;
 pub mod state;
 pub mod tasks;
 pub mod theme;
+pub mod third_party;
 pub mod widgets;
 
 #[cfg(test)]
@@ -125,6 +127,7 @@ pub struct Perf {
 }
 
 pub struct LightcraftApp {
+    presentation: presentation::Presentation,
     /// Per-catalog-revision caches of library-wide results the panels show every frame
     /// (expensive on big libraries).
     pub caches: Caches,
@@ -210,6 +213,7 @@ impl LightcraftApp {
         // AI mask requests run on the model's worker; frames apply their results (never wait)
         session.segmenter.background = true;
         Self {
+            presentation: presentation::Presentation::Standalone,
             session,
             ui: UiState::default(),
             services,
@@ -253,6 +257,16 @@ impl LightcraftApp {
             memory_applied: None,
             library_problem: None,
         }
+    }
+
+    /// Select immutable host presentation before the first frame; it is not saved in UiState.
+    pub fn with_presentation(mut self, presentation: presentation::Presentation) -> Self {
+        self.presentation = presentation;
+        self
+    }
+
+    pub fn presentation(&self) -> presentation::Presentation {
+        self.presentation
     }
 
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
@@ -342,7 +356,7 @@ impl LightcraftApp {
                 self.ui.unsaved_seen = true;
                 let t = ctx.input(|i| i.time);
                 let what = if n == 1 { "1 change".to_string() } else { format!("{n} changes") };
-                self.ui.toast = Some((format!("{what} saved in memory but not written to disk: {e} — LightCraft will retry"), t + 6.0));
+                self.ui.toast = Some((format!("{what} saved in memory but not written to disk: {e} — saving will be retried"), t + 6.0));
             }
             (None, true) => {
                 self.ui.unsaved_seen = false;

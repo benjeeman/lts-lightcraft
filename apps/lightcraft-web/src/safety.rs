@@ -72,9 +72,10 @@ pub fn show_blocking(text: &str) {
 }
 
 /// `panic = "abort"` on wasm: a panic ends the module. Say so on the page instead of leaving a
-/// frozen canvas, and say that the stored library is intact.
-pub fn install_panic_hook() {
-    std::panic::set_hook(Box::new(|info| {
+/// frozen canvas, in words that are true for the presentation (see
+/// [`crate::options::panic_message`]).
+pub fn install_panic_hook(presentation: lightcraft_ui_egui::presentation::Presentation) {
+    std::panic::set_hook(Box::new(move |info| {
         let msg = match (info.payload().downcast_ref::<&str>(), info.payload().downcast_ref::<String>()) {
             (Some(s), _) => (*s).to_string(),
             (_, Some(s)) => s.clone(),
@@ -82,10 +83,7 @@ pub fn install_panic_hook() {
         };
         let at = info.location().map(|l| format!(" at {}:{}", l.file(), l.line())).unwrap_or_default();
         log::error!("LightCraft panicked{at}: {msg}");
-        show_blocking(&format!(
-            "LightCraft stopped after an internal error:\n{msg}\n\nThe library saved in this browser is kept. Reload the page to continue.\n\
-             If it happens again right away, a photo may be the cause: reload with ?workers=0 or report the error."
-        ));
+        show_blocking(&crate::options::panic_message(presentation, &msg));
     }));
 }
 

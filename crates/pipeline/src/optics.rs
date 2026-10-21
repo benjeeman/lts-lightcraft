@@ -519,8 +519,10 @@ pub fn defringe(img: &mut Rgb32f, s: &DevelopSettings, scale: f64) {
     }
     let (w, h) = (img.width, img.height);
     let max_amt = o.defringe_purple_amount.max(o.defringe_green_amount);
-    // fringe width in source px grows with the amount (1..7 px), in output px at least one
-    let radius = ((1.0 + max_amt * 0.3) * scale).round().max(1.0) as usize;
+    // fringe width in source px grows with the amount (1..7 px), in output px at least one. A tight
+    // crop magnifies it without bound; past the image's sides the min/max windows are the whole
+    // row or column, so the radius is capped there (same pixels, no `x + r` overflow).
+    let radius = ((1.0 + max_amt * 0.3) * scale).round().max(1.0).min(w.max(h) as f64) as usize;
     // perceptual lightness and its local range (dilated contrast)
     let lab: Vec<[f32; 3]> = img.data.iter().map(|p| oklab_from_2020([p[0].max(0.0), p[1].max(0.0), p[2].max(0.0)])).collect();
     let l = Plane { width: w, height: h, data: lab.iter().map(|p| p[0]).collect() };

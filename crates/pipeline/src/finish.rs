@@ -20,6 +20,22 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// How much of the sharpening a detail of amplitude `det` (log2) gets at Detail `detail` (0..1).
+/// The default (0.25) sharpens every detail alike (1). Lower values hold back the small details
+/// (texture, noise) and sharpen the edges, down to edges only at 0; higher values bring the fine
+/// texture out, up to two and a half times at 1. The edges keep their strength either way.
+#[inline]
+pub fn sharpen_detail_weight(detail: f32, det: f32) -> f32 {
+    let a = det.abs();
+    if detail < 0.25 {
+        1.0 - (1.0 - detail / 0.25) * (1.0 - smooth(0.02, 0.2, a))
+    } else if detail > 0.25 {
+        1.0 + (detail - 0.25) / 0.75 * 1.5 * (1.0 - smooth(0.05, 0.4, a))
+    } else {
+        1.0
+    }
+}
+
 /// Parametric region curve (encoded domain) composed with the master point curve.
 fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
@@ -176,6 +192,8 @@ pub struct FinishParams {
     pub dehaze: f32,
     pub sharpen: f32,
     pub sharpen_mask: f32,
+    /// Detail › Sharpening › Detail as 0..1 (0.25 = the default; see [`sharpen_detail_weight`]).
+    pub sharpen_detail: f32,
     /// Airlight after and before exposure, exposure gain and EV (see [`crate::Prepared`]).
     pub air: f32,
     pub air_pre: f32,
@@ -244,6 +262,7 @@ impl FinishParams {
             dehaze,
             sharpen: (s.detail.sharpen_amount / 150.0) as f32,
             sharpen_mask: (s.detail.sharpen_masking / 100.0) as f32,
+            sharpen_detail: if s.detail.sharpen_detail.is_finite() { (s.detail.sharpen_detail / 100.0).clamp(0.0, 1.0) as f32 } else { 0.25 },
             air: air_pre * gain,
             air_pre,
             gain,
@@ -341,6 +360,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     } = fp;
     let (hl, sh, clar, tex, dehaze, sharpen, sharpen_mask, air, air_pre, gain, ev) =
         (*hl, *sh, *clar, *tex, *dehaze, *sharpen, *sharpen_mask, *air, *air_pre, *gain, *ev);
+    let sharpen_detail = fp.sharpen_detail;
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
     let out_to_norm = fp.out_to_norm;
     let long = fp.ow.max(fp.oh);
@@ -458,8 +478,10 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let tame = 1.0 - 0.6 * smooth(0.4, 1.6, det.abs());
                 delta += tx * 1.1 * det.clamp(-1.0, 1.0) * tame;
                 if sp != 0.0 {
+                    // Sharpening › Radius: its own band when not 1, else the texture band.
+                    let det = p.sharpen_blur.as_ref().map_or(det, |sb| l_pre - sb.data[i]);
                     let m = if sharpen_mask > 0.0 { smooth(sharpen_mask * 0.25, sharpen_mask * 0.25 + 0.15, det.abs()) } else { 1.0 };
-                    delta += sp * 1.3 * det.clamp(-0.8, 0.8) * m;
+                    delta += sp * 1.3 * det.clamp(-0.8, 0.8) * m * sharpen_detail_weight(sharpen_detail, det);
                 }
             }
             // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges

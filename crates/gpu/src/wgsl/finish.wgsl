@@ -1,6 +1,6 @@
 // The per-pixel stage: a straight port of `lightcraft_pipeline::finish` (keep in step with it).
-// Bindings: img (rgb, pre-exposure), log_l, base, clar, tex, dark, masks (NMASK planes, then the
-// blurred chromaticity when HAS_CHROMA), aux
+// Bindings: img (rgb, pre-exposure), log_l, base, clar, tex (then sharpening's own band when
+// HAS_SHARP), dark, masks (NMASK planes, then the blurred chromaticity when HAS_CHROMA), aux
 // (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms), out (packed RGBA8).
 
 fn tone_apply(y: f32) -> f32 {
@@ -252,6 +252,18 @@ fn out_encode(v: f32) -> f32 {
     return 1.099 * pow(l, 0.45) - 0.099;
 }
 
+// `finish::sharpen_detail_weight`: Sharpening › Detail (0..1, 0.25 = every detail alike).
+fn sharpen_detail_weight(detail: f32, det: f32) -> f32 {
+    let a = abs(det);
+    if (detail < 0.25) {
+        return 1.0 - (1.0 - detail / 0.25) * (1.0 - sstep(0.02, 0.2, a));
+    }
+    if (detail > 0.25) {
+        return 1.0 + (detail - 0.25) / 0.75 * 1.5 * (1.0 - sstep(0.05, 0.4, a));
+    }
+    return 1.0;
+}
+
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let w = pu(F_W);
@@ -384,12 +396,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let tame = 1.0 - 0.6 * sstep(0.4, 1.6, abs(det));
         delta += tx * 1.1 * clamp(det, -1.0, 1.0) * tame;
         if (sp != 0.0) {
+            // Sharpening › Radius: its own band (after the texture band) when not 1.
+            var sd = det;
+            if (pu(F_HAS_SHARP) != 0u) {
+                sd = l_pre - tex[n + i];
+            }
             let sm = pf(F_SHARPEN_MASK);
             var mk = 1.0;
             if (sm > 0.0) {
-                mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
+                mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(sd));
             }
-            delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
+            delta += sp * 1.3 * clamp(sd, -0.8, 0.8) * mk * sharpen_detail_weight(pf(F_SHARPEN_DETAIL), sd);
         }
     }
     // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
